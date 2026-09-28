@@ -10,14 +10,15 @@ v1.0 - initial working version
 
 ### Latest
 
-A rather nice GUI front end using tkinter was developed in half an
-hour or so using Claude Sonnet 5.  To use this, download both
-`svx_keywords.py` and `svx_keywords_gui.py` somewhere (both in the
-same directory), and run the latter.  This brings up a GUI interface
-with fields for selecting the `.svx` file, the keywords, and so on.
-The GUI generates the required command line to run `svx_kaywords.py`
-and the results are presented in a table.  Double-clicking on a table
-entry should open the corresponding file at the relevant line.
+A rather nice GUI front end using the python's built-in tkinter
+library was developed in half an hour or so using [Claude Sonnet 5](https://www.anthropic.com/news/claude-sonnet-5).  To
+use this, download both `svx_keywords.py` and `svx_keywords_gui.py`
+somewhere (both in the same directory), and run the latter.  This
+brings up a GUI interface with fields for selecting the `.svx` file,
+the survex keywords, and so on.  The GUI generates the required
+command line to run `svx_keywords.py` and the results are presented in
+a table.  Double-clicking on a table entry should open the
+corresponding file at the relevant line.
 
 ### Summary
 
