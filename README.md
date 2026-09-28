@@ -2,10 +2,22 @@
 
 _Current version:_
 
+v1.4 - tkinter GUI added courtesy of Claude Sonnet 5  
 v1.3 - (current) small internal improvements  
 v1.2 - reworked file trace mechanism  
 v1.1 - reworked internals  
 v1.0 - initial working version
+
+### Latest
+
+A rather nice GUI front end using tkinter was developed in half an
+hour or so using Claude Sonnet 5.  To use this, download both
+`svx_keywords.py` and `svx_keywords_gui.py` somewhere (both in the
+same directory), and run the latter.  This brings up a GUI interface
+with fields for selecting the `.svx` file, the keywords, and so on.
+The GUI generates the required command line to run `svx_kaywords.py`
+and the results are presented in a table.  Double-clicking on a table
+entry should open the corresponding file at the relevant line.
 
 ### Summary
 
