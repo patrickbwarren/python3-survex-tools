@@ -6,7 +6,7 @@ from a source data file tree.
 
 For usage see README.md.
 
-Copyright (c) 2023 Patrick B Warren
+Copyright (c) 2023-2026 Patrick B Warren
 
 Email: patrickbwarren@gmail.com
 

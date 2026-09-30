@@ -20,6 +20,29 @@ Matching lines are also parsed into a sortable, filterable results table
 the matched line in an editor of your choice (see the "Open with" field
 above the table). The Copy button copies the table as tab-separated values
 when that tab is showing, ready to paste straight into a spreadsheet.
+
+Built using Claude Sonnet 5 ; modified by hand
+
+For usage see README.md.
+
+Copyright (c) 2023-2026 Patrick B Warren
+
+Email: patrickbwarren@gmail.com
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see
+<http://www.gnu.org/licenses/>.
+
 """
 
 import fnmatch
@@ -362,7 +385,7 @@ class App(ttk.Frame):
         f.columnconfigure(1, weight=1)
         ttk.Label(f, text='Top-level .svx file:').grid(row=0, column=0, sticky='w', pady=2)
         ttk.Entry(f, textvariable=self.svx).grid(row=0, column=1, sticky='ew', padx=4)
-        ttk.Button(f, text='Browse…', command=self.browse_svx).grid(row=0, column=2)
+        ttk.Button(f, text='Browse...', command=self.browse_svx).grid(row=0, column=2)
 
         # --- search mode tabs ---
         self.notebook = nb = ttk.Notebook(self)
@@ -372,34 +395,35 @@ class App(ttk.Frame):
         kw.columnconfigure(1, weight=1)
         nb.add(kw, text='Keyword search')
         self.entry_row(kw, 0, 'Keywords:', self.keywords,
-                       '-k  Space or comma separated, case insensitive. Pre-filled with '
+                       'Space or comma separated, case insensitive. Pre-filled with '
                        'the defaults (include, begin, end) - edit freely to add or '
                        'remove any, e.g. include begin end entrance fix')
         opts = ttk.Frame(kw)
         opts.grid(row=1, column=0, columnspan=3, sticky='w', pady=(4, 0))
         self.check(opts, 'Totals per keyword', self.totals,
-                   '-t  Print a count for each keyword instead of the matching lines.', 0, 0)
+                   'Print a count for each keyword instead of the matching lines.', 0, 0)
         self.check(opts, 'One-line summary', self.summarize,
-                   '-s  Print a one-line summary instead of the matching lines.', 0, 1)
+                   'Print a one-line summary instead of the matching lines.', 0, 1)
         self.check(opts, 'Absolute paths', self.directories,
-                   '-d  Show absolute file paths instead of relative ones.', 0, 2)
+                   'Report absolute file paths instead of relative ones.', 0, 2)
         self.check(opts, 'List files visited', self.list_files,
-                   '-l  Also report each file as it is opened - useful for checking '
-                   'every *include is being followed.', 0, 3)
+                   'Report each file as it is opened.', 0, 3)
 
         gr = ttk.Frame(nb, padding=8)
         gr.columnconfigure(1, weight=1)
         nb.add(gr, text='Text search (grep)')
         self.entry_row(gr, 0, 'Pattern (regex):', self.grep,
-                       '-g  A Python regular expression matched against every line '
+                       'A Python regular expression matched against every line '
                        'in the survex file tree.')
-        self.check(gr, 'Ignore case', self.ignore_case,
-                   '-i  Case-insensitive matching.', 1, 0)
-        self.check(gr, 'Absolute paths', self.directories,
-                   '-d  Show absolute file paths instead of relative ones.', 1, 1)
-        self.check(gr, 'List files visited', self.list_files,
-                   '-l  Also report each file as it is opened - useful for checking '
-                   'every *include is being followed.', 1, 2)
+
+        gropts = ttk.Frame(gr)
+        gropts.grid(row=1, column=0, columnspan=3, sticky='w', pady=(4, 0))
+        self.check(gropts, 'Ignore case', self.ignore_case,
+                   'Case-insensitive matching.', 1, 0)
+        self.check(gropts, 'Absolute paths', self.directories,
+                   'Report absolute file paths instead of relative ones.', 1, 1)
+        self.check(gropts, 'List files visited', self.list_files,
+                   'Report each file as it is opened.', 1, 2)
 
         # --- command preview ---
         p = ttk.Frame(self)
@@ -413,7 +437,7 @@ class App(ttk.Frame):
         # --- buttons ---
         b = ttk.Frame(self)
         b.grid(row=3, column=0, sticky='ew', pady=8)
-        self.run_btn = ttk.Button(b, text='Run', command=self.run)
+        self.run_btn = ttk.Button(b, text='Search', command=self.run)
         self.run_btn.pack(side='left')
         self.stop_btn = ttk.Button(b, text='Stop', command=self.stop, state='disabled')
         self.stop_btn.pack(side='left', padx=4)
@@ -424,7 +448,7 @@ class App(ttk.Frame):
                 'a spreadsheet) when that tab is showing, or the raw output text '
                 'otherwise. Copies the selected rows/text if there is a selection, '
                 'otherwise everything currently shown.')
-        ttk.Button(b, text='Save output…', command=self.save_output).pack(side='left')
+        ttk.Button(b, text='Save output...', command=self.save_output).pack(side='left')
         self.master.bind('<Control-Return>', lambda e: self.run())
 
         # --- results: a sortable/filterable table, and the raw text output ---
