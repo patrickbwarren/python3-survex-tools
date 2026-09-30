@@ -52,17 +52,35 @@ def svx_encoding(p):
 # for subsequent file openings.  The wrapper code below checks for
 # such a postscript and prints it out at the appropriate time.  This
 # means the file openings are reported _after_ the relevant *include
-# statement.
+# statement.  If the file is not found a null fp is returned, to be
+# handled gracefully by the calling routine.
 
 def svx_open(p, hook=None, context=[]):
     '''open a survex file and reset line counter'''
     if not p.exists():
-        raise FileNotFoundError(p)
+        return None, 0, None, ''
     encoding = svx_encoding(p)
     fp = p.open('r', encoding=encoding)
     postscript = hook(p, context) if hook else ''
     line_number = 0
     return fp, line_number, encoding, postscript
+
+def trace_hook(p, context, status='entered'):
+    '''hook for tracing which files are being visited'''
+    path = str(p.absolute()) if args.directories else str(p)
+    context = '.'.join(context) if args.context else ''
+    if args.color:
+        context = f'{BLUE}{context}{CYAN}' if context else ''
+        if args.omit_linen:
+            postscript = f'{PURPLE}{path}{CYAN}:{BLUE}{context}:{RED}{status}{NC}'
+        else:
+            postscript = f'{PURPLE}{path}{CYAN}:{GREEN}0{CYAN}:{BLUE}{context}:{RED}{status}{NC}'
+    else:
+        if args.omit_linen:
+            postscript = f'{path}:{context}:{status}'
+        else:
+            postscript = f'{path}:0:{context}:{status}'
+    return postscript
 
 def svx_readline(fp, line_number):
     '''read a line from the survex file and increment line counter'''
@@ -113,6 +131,8 @@ class SvxReader:
         self.keywords = set(['INCLUDE', 'BEGIN', 'END'])
         self.stack = [(None, None, 0, '')] # initialise file stack with a sentinel
         self.fp, self.line_number, self.encoding, self.postscript = svx_open(self.p, hook=self.open_hook)
+        if self.fp is None:
+            raise FileNotFoundError(self.p)
         self.files_visited = 1
 
     def __iter__(self):
@@ -140,8 +160,12 @@ class SvxReader:
             self.stack.append((self.p, self.fp, self.line_number, self.encoding)) # push onto stack
             filename = ' '.join(arguments).strip('"').replace('\\', '/') # remove any quotes and replace backslashes
             self.p = Path(self.p.parent, filename).with_suffix('.svx') # the new path (add the suffix if not already present)
-            self.fp, self.line_number, self.encoding, record.postscript = svx_open(self.p, hook=self.open_hook, context=self.context) 
-            self.files_visited = self.files_visited + 1
+            self.fp, self.line_number, self.encoding, record.postscript = svx_open(self.p, hook=self.open_hook, context=self.context)
+            if self.fp is None:
+                record.postscript = self.open_hook(self.p, self.context, 'not found')
+                self.p, self.fp, self.line_number, self.encoding = self.stack.pop() # back to the including file
+            else:
+                self.files_visited = self.files_visited + 1
         return record
 
     def __enter__(self):
@@ -189,26 +213,7 @@ if __name__ == "__main__":
     parser.add_argument('-o', '--output', help='(optional) output to spreadsheet (.ods, .xlsx)')
     args = parser.parse_args()
 
-    if args.list_files:
-        def open_hook(p, context):
-            '''hook for tracing which files are being visited'''
-            path = str(p.absolute()) if args.directories else str(p)
-            context = '.'.join(context) if args.context else ''
-            entered = '<entered>' # ensure consistency
-            if args.color:
-                context = f'{BLUE}{context}{CYAN}' if context else ''
-                if args.omit_linen:
-                    postscript = f'{PURPLE}{path}{CYAN}:{BLUE}{context}:{RED}{entered}{NC}'
-                else:
-                    postscript = f'{PURPLE}{path}{CYAN}:{GREEN}0{CYAN}:{BLUE}{context}:{RED}{entered}{NC}'
-            else:
-                if args.omit_linen:
-                    postscript = f'{path}:{context}:{entered}'
-                else:
-                    postscript = f'{path}:0:{context}:{entered}'
-            return postscript
-    else:
-        open_hook = None
+    open_hook = trace_hook if args.list_files else None
 
     if args.grep: # simple grep mode
         
