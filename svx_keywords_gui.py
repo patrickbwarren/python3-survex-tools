@@ -13,16 +13,16 @@ Put this file in the same folder as svx_keywords.py - the GUI always looks
 for it right next to itself.
 
 On Debian/Ubuntu tkinter may need:   sudo apt install python3-tk
-For spreadsheet output you need:     pip install pandas openpyxl   (.xlsx)
-                                     pip install pandas odfpy      (.ods)
 
 Matching lines are also parsed into a sortable, filterable results table
-(click a column heading to sort, type in the filter box to narrow it down),
-and double-clicking a row opens that file at the matched line in an editor
-of your choice (see the "Editor" field above the table).
+(click a column heading to sort, type in the filter box to narrow it down,
+"Original order" undoes the sort). Double-clicking a row opens that file at
+the matched line in an editor of your choice (see the "Open with" field
+above the table). The Copy button copies the table as tab-separated values
+when that tab is showing, ready to paste straight into a spreadsheet.
 """
 
-import importlib.util
+import fnmatch
 import os
 import queue
 import re
@@ -103,6 +103,188 @@ class Tooltip:
             self.tip = None
 
 
+class FileBrowserDialog(tk.Toplevel):
+    '''A simple "Open" file dialog that hides dotfiles by default, with a
+    checkbox to reveal them - tkinter's built-in dialog doesn't offer that,
+    so this one stands in for it.'''
+
+    def __init__(self, parent, initialdir=None, filetypes=None, title='Open'):
+        super().__init__(parent)
+        self.result = None
+        self.filetypes = filetypes or [('All files', '*')]
+        self.show_hidden = tk.BooleanVar(value=False)
+        self.dir_var = tk.StringVar()
+        self.name_var = tk.StringVar()
+        self.filter_var = tk.StringVar(value=self.filetypes[0][0])
+
+        self.title(title)
+        self.transient(parent)
+        self.geometry('640x440')
+        self.minsize(480, 320)
+        self.protocol('WM_DELETE_WINDOW', self.cancel)
+        self.bind('<Escape>', lambda e: self.cancel())
+
+        self.build_ui()
+        start = Path(initialdir).expanduser() if initialdir else Path.cwd()
+        if not start.is_dir():
+            start = Path.cwd()
+        self.navigate(str(start))
+
+        self.grab_set()
+        self.focus_set()
+
+    def build_ui(self):
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
+
+        top = ttk.Frame(self, padding=(8, 8, 8, 4))
+        top.grid(row=0, column=0, sticky='ew')
+        top.columnconfigure(1, weight=1)
+        ttk.Label(top, text='Look in:').grid(row=0, column=0, sticky='w')
+        dir_entry = ttk.Entry(top, textvariable=self.dir_var)
+        dir_entry.grid(row=0, column=1, sticky='ew', padx=4)
+        dir_entry.bind('<Return>', lambda e: self.navigate(self.dir_var.get()))
+        ttk.Button(top, text='Up', width=4, command=self.go_up).grid(row=0, column=2)
+        ttk.Button(top, text='Home', command=lambda: self.navigate(str(Path.home()))
+                  ).grid(row=0, column=3, padx=(4, 0))
+
+        mid = ttk.Frame(self, padding=(8, 0))
+        mid.grid(row=1, column=0, sticky='nsew')
+        mid.columnconfigure(0, weight=1)
+        mid.rowconfigure(0, weight=1)
+        self.tree = ttk.Treeview(mid, show='tree', selectmode='browse')
+        ys = ttk.Scrollbar(mid, orient='vertical', command=self.tree.yview)
+        self.tree.configure(yscrollcommand=ys.set)
+        self.tree.grid(row=0, column=0, sticky='nsew')
+        ys.grid(row=0, column=1, sticky='ns')
+        self.tree.bind('<Double-1>', self.on_double_click)
+        self.tree.bind('<<TreeviewSelect>>', self.on_select)
+        self.tree.bind('<Return>', self.on_double_click)
+
+        bottom = ttk.Frame(self, padding=8)
+        bottom.grid(row=2, column=0, sticky='ew')
+        bottom.columnconfigure(1, weight=1)
+        ttk.Label(bottom, text='File name:').grid(row=0, column=0, sticky='w')
+        name_entry = ttk.Entry(bottom, textvariable=self.name_var)
+        name_entry.grid(row=0, column=1, sticky='ew', padx=4)
+        name_entry.bind('<Return>', lambda e: self.ok())
+        ttk.Label(bottom, text='Files of type:').grid(row=1, column=0, sticky='w', pady=(4, 0))
+        filter_box = ttk.Combobox(bottom, textvariable=self.filter_var, state='readonly',
+                                  values=[label for label, _ in self.filetypes])
+        filter_box.grid(row=1, column=1, sticky='ew', padx=4, pady=(4, 0))
+        filter_box.bind('<<ComboboxSelected>>', lambda e: self.refresh())
+
+        hidden_check = ttk.Checkbutton(bottom, text='Show hidden files and directories',
+                                       variable=self.show_hidden, command=self.refresh)
+        hidden_check.grid(row=2, column=0, columnspan=2, sticky='w', pady=(6, 0))
+
+        buttons = ttk.Frame(bottom)
+        buttons.grid(row=3, column=0, columnspan=2, sticky='e', pady=(8, 0))
+        ttk.Button(buttons, text='Open', command=self.ok).pack(side='left')
+        ttk.Button(buttons, text='Cancel', command=self.cancel).pack(side='left', padx=(6, 0))
+
+    # -- navigation --------------------------------------------------
+
+    def current_pattern(self):
+        for label, pattern in self.filetypes:
+            if label == self.filter_var.get():
+                return pattern
+        return '*'
+
+    def navigate(self, folder):
+        folder = str(Path(folder).expanduser())
+        if not os.path.isdir(folder):
+            self.bell()
+            return
+        self.current_dir = os.path.abspath(folder)
+        self.dir_var.set(self.current_dir)
+        self.name_var.set('')
+        self.refresh()
+
+    def go_up(self):
+        parent = os.path.dirname(self.current_dir.rstrip(os.sep)) or os.sep
+        if parent != self.current_dir:
+            self.navigate(parent)
+
+    def refresh(self):
+        self.tree.delete(*self.tree.get_children())
+        pattern = self.current_pattern()
+        try:
+            entries = list(os.scandir(self.current_dir))
+        except OSError as err:
+            self.tree.insert('', 'end', text=f'(cannot read this folder: {err.strerror})',
+                             values=('', ''))
+            return
+        show_hidden = self.show_hidden.get()
+        dirs, files = [], []
+        for entry in entries:
+            if not show_hidden and entry.name.startswith('.'):
+                continue
+            try:
+                is_dir = entry.is_dir(follow_symlinks=True)
+            except OSError:
+                continue
+            (dirs if is_dir else files).append(entry.name)
+        dirs.sort(key=str.lower)
+        files = files if pattern == '*' else [f for f in files
+                                              if fnmatch.fnmatch(f.lower(), pattern.lower())]
+        files.sort(key=str.lower)
+        for name in dirs:
+            self.tree.insert('', 'end', text=name + '/', values=('dir', name))
+        for name in files:
+            self.tree.insert('', 'end', text=name, values=('file', name))
+
+    # -- selection -----------------------------------------------------
+
+    def on_select(self, _event):
+        selection = self.tree.selection()
+        if not selection:
+            return
+        kind, name = self.tree.item(selection[0], 'values')
+        if kind == 'file':
+            self.name_var.set(name)
+
+    def on_double_click(self, _event):
+        selection = self.tree.selection()
+        if not selection:
+            return
+        kind, name = self.tree.item(selection[0], 'values')
+        if kind == 'dir':
+            self.navigate(os.path.join(self.current_dir, name))
+        elif kind == 'file':
+            self.finish(os.path.join(self.current_dir, name))
+
+    def ok(self):
+        value = self.name_var.get().strip()
+        if not value:
+            self.bell()
+            return
+        candidate = Path(value).expanduser()
+        candidate = candidate if candidate.is_absolute() else Path(self.current_dir, candidate)
+        if candidate.is_dir():
+            self.navigate(str(candidate))
+        elif candidate.exists():
+            self.finish(str(candidate))
+        else:
+            self.bell()
+
+    def finish(self, path):
+        self.result = path
+        self.destroy()
+
+    def cancel(self):
+        self.result = None
+        self.destroy()
+
+
+def ask_open_filename(parent, initialdir=None, filetypes=None, title='Open'):
+    '''Modal replacement for filedialog.askopenfilename that hides dotfiles
+    by default (with a checkbox to reveal them). Returns a path, or ''.'''
+    dialog = FileBrowserDialog(parent, initialdir=initialdir, filetypes=filetypes, title=title)
+    parent.wait_window(dialog)
+    return dialog.result or ''
+
+
 class App(ttk.Frame):
 
     def __init__(self, master, initial_file=''):
@@ -117,13 +299,9 @@ class App(ttk.Frame):
         # --- variables (names follow the command line options) ---
         self.script = str(Path(__file__).resolve().parent / SCRIPT_NAME)  # fixed, alongside this file
         self.svx = tk.StringVar(value=initial_file)
-        self.keywords = tk.StringVar(value='include,begin,end')  # -k, pre-filled with the defaults
-        self.no_ignore_case = tk.BooleanVar()      # -n
+        self.keywords = tk.StringVar(value='include begin end')  # -k, pre-filled with the defaults
         self.totals = tk.BooleanVar()              # -t
         self.summarize = tk.BooleanVar()           # -s
-        self.do_output = tk.BooleanVar()           # -o
-        self.output = tk.StringVar()
-        self.quiet = tk.BooleanVar()               # -q
         self.grep = tk.StringVar()                 # -g
         self.ignore_case = tk.BooleanVar()         # -i
         self.list_files = tk.BooleanVar()          # -l
@@ -144,8 +322,7 @@ class App(ttk.Frame):
 
         self.build_ui()
 
-        watched = [self.svx, self.keywords, self.no_ignore_case, self.totals,
-                   self.summarize, self.do_output, self.output, self.quiet,
+        watched = [self.svx, self.keywords, self.totals, self.summarize,
                    self.grep, self.ignore_case, self.list_files, self.directories]
         for var in watched:
             var.trace_add('write', self.update_preview)
@@ -177,7 +354,7 @@ class App(ttk.Frame):
     def build_ui(self):
         self.pack(fill='both', expand=True)
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(5, weight=1)
+        self.rowconfigure(4, weight=1)
 
         # --- files ---
         f = ttk.LabelFrame(self, text='Files', padding=6)
@@ -195,30 +372,20 @@ class App(ttk.Frame):
         kw.columnconfigure(1, weight=1)
         nb.add(kw, text='Keyword search')
         self.entry_row(kw, 0, 'Keywords:', self.keywords,
-                       '-k  Comma-separated, case insensitive. Pre-filled with the '
-                       'defaults (include, begin, end) - edit freely to add or remove '
-                       'any, e.g. include,begin,end,entrance,fix')
+                       '-k  Space or comma separated, case insensitive. Pre-filled with '
+                       'the defaults (include, begin, end) - edit freely to add or '
+                       'remove any, e.g. include begin end entrance fix')
         opts = ttk.Frame(kw)
         opts.grid(row=1, column=0, columnspan=3, sticky='w', pady=(4, 0))
         self.check(opts, 'Totals per keyword', self.totals,
                    '-t  Print a count for each keyword instead of the matching lines.', 0, 0)
         self.check(opts, 'One-line summary', self.summarize,
                    '-s  Print a one-line summary instead of the matching lines.', 0, 1)
-        self.check(opts, 'Preserve keyword case (spreadsheet)', self.no_ignore_case,
-                   '-n  Keep the keyword as written in the source rather than '
-                   'upper-casing it (affects spreadsheet output).', 0, 2)
-
-        sp = ttk.LabelFrame(kw, text='Spreadsheet output', padding=6)
-        sp.grid(row=2, column=0, columnspan=3, sticky='ew', pady=(8, 0))
-        sp.columnconfigure(1, weight=1)
-        self.check(sp, 'Write to spreadsheet:', self.do_output,
-                   '-o  Write the results to a .xlsx or .ods file instead of '
-                   'printing the matching lines.', 0, 0)
-        ttk.Entry(sp, textvariable=self.output).grid(row=0, column=1, sticky='ew', padx=4)
-        ttk.Button(sp, text='Save as…', command=self.browse_output).grid(row=0, column=2)
-        self.check(sp, 'Quiet (only print errors)', self.quiet,
-                   '-q  Suppress the summary messages when writing a spreadsheet.',
-                   1, 0, span=2)
+        self.check(opts, 'Absolute paths', self.directories,
+                   '-d  Show absolute file paths instead of relative ones.', 0, 2)
+        self.check(opts, 'List files visited', self.list_files,
+                   '-l  Also report each file as it is opened - useful for checking '
+                   'every *include is being followed.', 0, 3)
 
         gr = ttk.Frame(nb, padding=8)
         gr.columnconfigure(1, weight=1)
@@ -227,19 +394,16 @@ class App(ttk.Frame):
                        '-g  A Python regular expression matched against every line '
                        'in the survex file tree.')
         self.check(gr, 'Ignore case', self.ignore_case,
-                   '-i  Case-insensitive matching.', 1, 0, span=2)
-
-        # --- display options (both modes) ---
-        d = ttk.LabelFrame(self, text='Display options', padding=6)
-        d.grid(row=2, column=0, sticky='ew', pady=(8, 0))
-        self.check(d, 'List files visited', self.list_files,
-                   '-l  Also report each file as it is opened.', 0, 0)
-        self.check(d, 'Absolute paths', self.directories,
-                   '-d  Show absolute file paths instead of relative ones.', 0, 1)
+                   '-i  Case-insensitive matching.', 1, 0)
+        self.check(gr, 'Absolute paths', self.directories,
+                   '-d  Show absolute file paths instead of relative ones.', 1, 1)
+        self.check(gr, 'List files visited', self.list_files,
+                   '-l  Also report each file as it is opened - useful for checking '
+                   'every *include is being followed.', 1, 2)
 
         # --- command preview ---
         p = ttk.Frame(self)
-        p.grid(row=3, column=0, sticky='ew', pady=(8, 0))
+        p.grid(row=2, column=0, sticky='ew', pady=(8, 0))
         p.columnconfigure(1, weight=1)
         ttk.Label(p, text='Equivalent command:').grid(row=0, column=0, sticky='w')
         ttk.Entry(p, textvariable=self.preview, state='readonly').grid(
@@ -248,19 +412,24 @@ class App(ttk.Frame):
 
         # --- buttons ---
         b = ttk.Frame(self)
-        b.grid(row=4, column=0, sticky='ew', pady=8)
+        b.grid(row=3, column=0, sticky='ew', pady=8)
         self.run_btn = ttk.Button(b, text='Run', command=self.run)
         self.run_btn.pack(side='left')
         self.stop_btn = ttk.Button(b, text='Stop', command=self.stop, state='disabled')
         self.stop_btn.pack(side='left', padx=4)
         ttk.Button(b, text='Clear', command=self.clear).pack(side='left')
-        ttk.Button(b, text='Copy', command=self.copy).pack(side='left', padx=4)
+        copy_btn = ttk.Button(b, text='Copy', command=self.copy)
+        copy_btn.pack(side='left', padx=4)
+        Tooltip(copy_btn, 'Copies the results table (tab-separated, ready to paste into '
+                'a spreadsheet) when that tab is showing, or the raw output text '
+                'otherwise. Copies the selected rows/text if there is a selection, '
+                'otherwise everything currently shown.')
         ttk.Button(b, text='Save output…', command=self.save_output).pack(side='left')
         self.master.bind('<Control-Return>', lambda e: self.run())
 
         # --- results: a sortable/filterable table, and the raw text output ---
         self.results_notebook = rn = ttk.Notebook(self)
-        rn.grid(row=5, column=0, sticky='nsew')
+        rn.grid(row=4, column=0, sticky='nsew')
 
         # -- table tab --
         t = ttk.Frame(rn, padding=(0, 6, 0, 0))
@@ -317,9 +486,9 @@ class App(ttk.Frame):
 
         empty = ttk.Label(t, foreground='#666666', padding=(2, 6), justify='left',
                           text='The table fills in with matching lines from a keyword or '
-                          'grep search.\n"Totals", "Summary" and spreadsheet-only runs '
-                          "don't print individual lines, so the table stays empty for "
-                          'those \u2014 check the raw output tab instead.')
+                          'grep search.\n"Totals" and "Summary" runs only print counts, '
+                          'not individual lines, so the table stays empty for those '
+                          '\u2014 check the raw output tab instead.')
         empty.grid(row=1, column=0, sticky='nw')
         self.empty_hint = empty
         self.empty_hint.lower(self.tree)  # tree covers the hint once rows arrive
@@ -342,26 +511,22 @@ class App(ttk.Frame):
             self.text.tag_configure(tag, foreground=colour)
 
         ttk.Label(self, textvariable=self.status, relief='sunken',
-                  anchor='w', padding=(4, 2)).grid(row=6, column=0, sticky='ew', pady=(6, 0))
+                  anchor='w', padding=(4, 2)).grid(row=5, column=0, sticky='ew', pady=(6, 0))
 
     # ------------------------------------------------------------------
     # file dialogs
     # ------------------------------------------------------------------
 
     def browse_svx(self):
-        name = filedialog.askopenfilename(
-            title='Choose the top-level survex file',
-            filetypes=[('Survex files', '*.svx'), ('All files', '*')])
+        current = self.svx.get().strip()
+        initialdir = Path(current).expanduser().parent if current else Path.cwd()
+        if not initialdir.is_dir():
+            initialdir = Path.cwd()
+        name = ask_open_filename(
+            self.master, initialdir=str(initialdir), title='Choose the top-level survex file',
+            filetypes=[('Survex files (*.svx)', '*.svx'), ('All files', '*')])
         if name:
             self.svx.set(name)
-
-    def browse_output(self):
-        name = filedialog.asksaveasfilename(
-            title='Save spreadsheet as', defaultextension='.xlsx',
-            filetypes=[('Excel workbook', '*.xlsx'), ('OpenDocument spreadsheet', '*.ods')])
-        if name:
-            self.output.set(name)
-            self.do_output.set(True)
 
     # ------------------------------------------------------------------
     # command construction
@@ -369,6 +534,13 @@ class App(ttk.Frame):
 
     def grep_mode(self):
         return self.notebook.index(self.notebook.select()) == 1
+
+    def parse_keywords(self):
+        '''Split the keywords field on commas and/or whitespace and rejoin it
+        the way -k expects (comma-separated), so 'include begin end' and
+        'include, begin, end' both work.'''
+        parts = re.split(r'[,\s]+', self.keywords.get().strip())
+        return ','.join(p for p in parts if p)
 
     def build_command(self):
         '''Return (argument list, working directory, svx file name).
@@ -387,27 +559,17 @@ class App(ttk.Frame):
             if self.ignore_case.get():
                 args.append('-i')
         else:
-            value = self.keywords.get().replace(' ', '').strip(',')
+            value = self.parse_keywords()
             if value:
                 args += ['-k', value]
-            for flag, var in (('-n', self.no_ignore_case), ('-t', self.totals),
-                              ('-s', self.summarize)):
+            for flag, var in (('-t', self.totals), ('-s', self.summarize)):
                 if var.get():
                     args.append(flag)
-            if self.do_output.get():
-                out = self.output.get().strip()
-                if not out:
-                    raise ValueError('choose a spreadsheet file name')
-                out = Path(out).expanduser().absolute()
-                if out.suffix.lower() not in ('.xlsx', '.ods'):
-                    out = out.with_suffix('.xlsx')
-                args += ['-o', str(out)]
-                if self.quiet.get():
-                    args.append('-q')
 
-        for flag, var in (('-l', self.list_files), ('-d', self.directories)):
-            if var.get():
-                args.append(flag)
+        if self.directories.get():
+            args.append('-d')
+        if self.list_files.get():
+            args.append('-l')
         args += ['-x', '-c']  # always show survex context and colourise; the GUI renders both
 
         # Run inside the folder of the svx file, so relative paths in the
@@ -446,27 +608,14 @@ class App(ttk.Frame):
         if not svx_path.exists() and not svx_path.with_suffix('.svx').exists():
             messagebox.showerror('Cannot run', f'File not found:\n{svx_path}')
             return
-        if '-o' in args:
-            out_path = args[args.index('-o') + 1]
-            needed = 'odf' if out_path.endswith('.ods') else 'openpyxl'
-            pip_name = 'odfpy' if needed == 'odf' else 'openpyxl'
-            missing = [m for m, p in (('pandas', 'pandas'), (needed, pip_name))
-                       if importlib.util.find_spec(m) is None]
-            if missing:
-                names = ' '.join('pandas' if m == 'pandas' else pip_name for m in missing)
-                messagebox.showerror('Missing Python package',
-                                     'Spreadsheet output needs extra packages.\n'
-                                     f'Install with:\n\n    pip install {names}')
-                return
 
         self.clear()
         self.grep_mode_running = self.grep_mode()
         self.run_cwd = cwd
-        # keyword mode only prints per-line matches when totals/summarize/output
-        # are all off (otherwise it just prints counts) - grep mode always does
+        # keyword mode only prints per-line matches when totals/summarize are
+        # off (otherwise it just prints counts) - grep mode always does
         self.run_table_eligible = (self.grep_mode_running or
-                                   not (self.totals.get() or self.summarize.get()
-                                        or self.do_output.get()))
+                                   not (self.totals.get() or self.summarize.get()))
         self.results_notebook.select(0 if self.run_table_eligible else 1)
         env = dict(os.environ, PYTHONUNBUFFERED='1', PYTHONIOENCODING='utf-8')
         cmd = [sys.executable, '-u', str(script.absolute())] + args + [name]
@@ -709,13 +858,36 @@ class App(ttk.Frame):
         self.clear_table()
 
     def copy(self):
+        '''Copy the table (as tab-separated values, ready to paste into a
+        spreadsheet) if that tab is showing, otherwise the raw text output.'''
+        if self.results_notebook.index(self.results_notebook.select()) == 0:
+            self.copy_table()
+        else:
+            self.copy_raw_text()
+
+    def copy_raw_text(self):
         try:
             selected = self.text.get('sel.first', 'sel.last')
         except tk.TclError:
             selected = self.text.get('1.0', 'end-1c')
         self.clipboard_clear()
         self.clipboard_append(selected)
-        self.status.set('Copied to clipboard')
+        self.status.set('Copied raw output to clipboard')
+
+    def copy_table(self):
+        # a selection copies just those rows; otherwise every row currently shown
+        items = self.tree.selection() or self.tree.get_children()
+        if not items:
+            self.status.set('No results to copy')
+            return
+        columns = ('file', 'line', 'context', 'text')
+        lines = ['\t'.join(self.headings[c] for c in columns)]
+        for item in items:
+            lines.append('\t'.join(str(v) for v in self.tree.item(item, 'values')))
+        self.clipboard_clear()
+        self.clipboard_append('\n'.join(lines))
+        self.status.set(f'Copied {len(items)} row{"s" if len(items) != 1 else ""} '
+                        'to clipboard (tab-separated - paste straight into a spreadsheet)')
 
     def save_output(self):
         name = filedialog.asksaveasfilename(
