@@ -65,7 +65,7 @@ def svx_open(p, hook=None, context=[]):
     line_number = 0
     return fp, line_number, encoding, postscript
 
-def trace_hook(p, context, status='entered'):
+def trace_hook(p, context, status='file entered'):
     '''hook for tracing which files are being visited'''
     path = str(p.absolute()) if args.directories else str(p)
     context = '.'.join(context) if args.context else ''
@@ -162,7 +162,7 @@ class SvxReader:
             self.p = Path(self.p.parent, filename).with_suffix('.svx') # the new path (add the suffix if not already present)
             self.fp, self.line_number, self.encoding, record.postscript = svx_open(self.p, hook=self.open_hook, context=self.context)
             if self.fp is None:
-                record.postscript = self.open_hook(self.p, self.context, 'not found')
+                record.postscript = trace_hook(self.p, self.context, 'file not found')
                 self.p, self.fp, self.line_number, self.encoding = self.stack.pop() # back to the including file
             else:
                 self.files_visited = self.files_visited + 1
